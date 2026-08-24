@@ -39,8 +39,9 @@ plugins:
     allowSearch: true
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
-    # Prefer playback-capable clients first. MUSIC stays enabled for ytmsearch metadata.
+    # TV is the OAuth-capable playback client. Keep the others as fallbacks.
     clients:
+      - TV
       - ANDROID_VR
       - WEB
       - MWEB
