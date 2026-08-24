@@ -5,7 +5,7 @@
   "description": "Private Discord music bot inspired by Lunox, powered by Discord.js, Kazagumo/Shoukaku and Lavalink.",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node src/waitForLavalink.js && node src/index.js",
     "dev": "node --watch src/index.js"
   },
   "engines": {
