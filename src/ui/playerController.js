@@ -16,15 +16,14 @@ function formatTime(ms = 0) {
 
 function queueText(player) {
   if (!player?.queue || player.queue.isEmpty) return "Queue is empty.";
-
   return player.queue
     .slice(0, 10)
-    .map((track, index) => `${index + 1}. **${track.title}** — ${track.author}`)
+    .map((track, index) => `${index + 1}. **${track.title}** — ${track.author || "Unknown"}`)
     .join("\n");
 }
 
 function buildController(client, player, track) {
-  const duration = track.isStream ? "LIVE" : formatTime(track.duration);
+  const duration = track.isStream ? "LIVE" : formatTime(track.length);
   const requesterId = track.requester?.id || track.requester?.user?.id;
   const requester = requesterId ? `<@${requesterId}>` : "Unknown";
 
@@ -37,13 +36,13 @@ function buildController(client, player, track) {
     .setTitle(track.title || "Unknown track")
     .setURL(track.uri || null)
     .setDescription(`**${track.author || "Unknown artist"}**`)
-    .setThumbnail(track.artworkUrl || null)
+    .setThumbnail(track.thumbnail || null)
     .addFields(
       { name: "Duration", value: `\`${duration}\``, inline: true },
       { name: "Volume", value: `\`${player.volume}%\``, inline: true },
       { name: "Loop", value: `\`${player.loop || "none"}\``, inline: true },
       { name: "Requested by", value: requester, inline: true },
-      { name: "Source", value: `\`${track.source || "unknown"}\``, inline: true },
+      { name: "Source", value: `\`${track.sourceName || "unknown"}\``, inline: true },
       { name: "Up next", value: `\`${player.queue?.size || 0} song(s)\``, inline: true },
     )
     .setFooter({ text: "Windy Music • YouTube + Spotify" });
@@ -72,20 +71,21 @@ function buildController(client, player, track) {
 async function sendPlayerController(client, player, track) {
   if (!player) return;
 
-  if (player.controllerCollector) player.controllerCollector.stop("track-change");
+  const previousCollector = player.data.get("controllerCollector");
+  if (previousCollector) previousCollector.stop("track-change");
 
   const channel = client.channels.cache.get(player.textId);
   if (!channel) return;
 
   const { embed, rows } = buildController(client, player, track);
   const message = await channel.send({ embeds: [embed], components: rows });
-  player.message = message;
+  player.data.set("controllerMessage", message);
 
   const collector = message.createMessageComponentCollector();
-  player.controllerCollector = collector;
+  player.data.set("controllerCollector", collector);
 
   collector.on("collect", async (interaction) => {
-    const currentPlayer = client.rainlink.players.get(player.guildId);
+    const currentPlayer = client.kazagumo.players.get(player.guildId);
     if (!currentPlayer) return collector.stop("player-gone");
 
     if (!interaction.member.voice.channel || currentPlayer.voiceId !== interaction.member.voice.channelId) {
@@ -100,15 +100,16 @@ async function sendPlayerController(client, player, track) {
     switch (interaction.customId) {
       case "music:pause":
         await interaction.deferUpdate();
-        if (currentPlayer.paused) currentPlayer.resume();
-        else currentPlayer.pause();
+        currentPlayer.pause(!currentPlayer.paused);
         break;
 
-      case "music:prev":
-        if (!currentPlayer.queue.previous.length) return reply("There is no previous track.");
+      case "music:prev": {
+        const previous = currentPlayer.getPrevious(true);
+        if (!previous) return reply("There is no previous track.");
         await interaction.deferUpdate();
-        currentPlayer.previous();
+        await currentPlayer.play(previous);
         return;
+      }
 
       case "music:skip":
         if (currentPlayer.queue.isEmpty) return reply("Nothing else is queued.");
@@ -117,8 +118,8 @@ async function sendPlayerController(client, player, track) {
         return;
 
       case "music:loop":
-        if (currentPlayer.loop === "none") currentPlayer.setLoop("song");
-        else if (currentPlayer.loop === "song") currentPlayer.setLoop("queue");
+        if (currentPlayer.loop === "none") currentPlayer.setLoop("track");
+        else if (currentPlayer.loop === "track") currentPlayer.setLoop("queue");
         else currentPlayer.setLoop("none");
         return reply(`Loop mode: **${currentPlayer.loop}**`);
 
@@ -129,13 +130,13 @@ async function sendPlayerController(client, player, track) {
 
       case "music:voldown": {
         const next = Math.max(client.config.minVolume, currentPlayer.volume - 10);
-        currentPlayer.setVolume(next);
+        await currentPlayer.setVolume(next);
         return reply(`Volume: **${next}%**`);
       }
 
       case "music:volup": {
         const next = Math.min(client.config.maxVolume, currentPlayer.volume + 10);
-        currentPlayer.setVolume(next);
+        await currentPlayer.setVolume(next);
         return reply(`Volume: **${next}%**`);
       }
 
@@ -144,7 +145,7 @@ async function sendPlayerController(client, player, track) {
 
       case "music:stop":
         await interaction.deferUpdate();
-        currentPlayer.stop();
+        await currentPlayer.destroy();
         return;
     }
 
