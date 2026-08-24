@@ -7,25 +7,26 @@ services:
       LAVALINK_SERVER_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
-      JAVA_TOOL_OPTIONS: -Xms128m -Xmx512m
+      JAVA_TOOL_OPTIONS: -Xms64m -Xmx384m
     volumes:
       - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
     ports:
       - "2333:2333"
+    mem_limit: 640m
 
   bot:
-    image: node:22-bookworm-slim
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: windy-music-bot
     restart: unless-stopped
-    working_dir: /app
-    command: sh -c "npm install && npm start"
     env_file:
       - .env
     environment:
       LAVALINK_HOST: lavalink
       LAVALINK_PORT: 2333
       LAVALINK_SECURE: "false"
-    volumes:
-      - ./:/app
+      NODE_OPTIONS: --max-old-space-size=192
     depends_on:
       - lavalink
+    mem_limit: 256m
