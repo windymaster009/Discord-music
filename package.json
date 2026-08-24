@@ -1,0 +1,21 @@
+{
+  "name": "windy-discord-music",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Private Discord music bot inspired by Lunox, powered by Discord.js, Rainlink and Lavalink.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.3.1",
+    "rainlink": "^1.2.9",
+    "rainlink-voice": "^1.0.1"
+  },
+  "license": "MIT"
+}
