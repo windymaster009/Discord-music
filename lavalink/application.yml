@@ -39,11 +39,15 @@ plugins:
     allowSearch: true
     allowDirectVideoIds: true
     allowDirectPlaylistIds: true
+    # Prefer playback-capable clients first. MUSIC stays enabled for ytmsearch metadata.
     clients:
-      - MUSIC
       - ANDROID_VR
       - WEB
       - MWEB
+      - WEBEMBEDDED
+      - MUSIC
+    oauth:
+      enabled: ${YOUTUBE_OAUTH_ENABLED:false}
 
   lavasrc:
     providers:
@@ -76,3 +80,5 @@ logging:
   level:
     root: INFO
     lavalink: INFO
+    dev.lavalink.youtube: INFO
+    dev.lavalink.youtube.http.YoutubeOauth2Handler: INFO
