@@ -7,6 +7,7 @@ services:
       LAVALINK_SERVER_PASSWORD: ${LAVALINK_PASSWORD:-youshallnotpass}
       SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
       SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      YOUTUBE_OAUTH_ENABLED: ${YOUTUBE_OAUTH_ENABLED:-false}
       JAVA_TOOL_OPTIONS: -Xms64m -Xmx384m
     volumes:
       - ./lavalink/application.yml:/opt/Lavalink/application.yml:ro
