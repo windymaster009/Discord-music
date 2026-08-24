@@ -1,0 +1,21 @@
+{
+  "name": "windy-discord-music",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Private Discord music bot inspired by Lunox, powered by Discord.js, Kazagumo/Shoukaku and Lavalink.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/waitForLavalink.js && node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^17.3.1",
+    "kazagumo": "^3.4.2",
+    "shoukaku": "^4.3.0"
+  },
+  "license": "MIT"
+}
