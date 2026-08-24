@@ -13,6 +13,7 @@ Private Discord music bot for a personal server. Inspired by [Lunox](https://git
 - Guild-scoped slash commands when `GUILD_ID` is configured
 - Docker stack for bot + Lavalink
 - Lavalink 4.2.2 with DAVE support
+- Raspberry Pi 4 / ARM64 optimized Docker settings
 
 ## Stack
 
@@ -23,6 +24,51 @@ Private Discord music bot for a personal server. Inspired by [Lunox](https://git
 - youtube-source plugin 1.18.2
 - LavaSrc 4.8.3
 
+## Raspberry Pi 4 target
+
+The official Lavalink 4.2.2 Docker image includes a native `linux/arm64` build, so a 64-bit Raspberry Pi OS installation can run it without x86 emulation.
+
+This repo keeps the Pi deployment lightweight:
+
+- Lavalink Java heap: 64 MB initial / 384 MB maximum
+- Lavalink container memory limit: 640 MB
+- Node bot heap: 192 MB maximum
+- Node bot container memory limit: 256 MB
+- No MongoDB
+- No Discord sharding
+- Dependencies are installed when the bot image is built, not on every reboot
+
+Recommended Pi checks:
+
+```bash
+uname -m
+```
+
+Expected on a 64-bit Pi OS:
+
+```text
+aarch64
+```
+
+Check available RAM:
+
+```bash
+free -h
+```
+
+Watch the containers while testing music:
+
+```bash
+docker stats
+```
+
+Check Pi temperature/throttling:
+
+```bash
+vcgencmd measure_temp
+vcgencmd get_throttled
+```
+
 ## Setup
 
 ### 1. Clone
@@ -30,11 +76,6 @@ Private Discord music bot for a personal server. Inspired by [Lunox](https://git
 ```bash
 git clone https://github.com/windymaster009/Discord-music.git
 cd Discord-music
-```
-
-Checkout the development branch while this first version is being built:
-
-```bash
 git checkout feature/modern-music-bot
 ```
 
@@ -67,12 +108,12 @@ Invite the bot with these permissions:
 - Speak
 - Use Application Commands
 
-Enable the **Server Members / Message Content intents only if we add features that actually need them later**. The current bot only needs Guilds + Guild Voice States at runtime.
+The current bot only needs Guilds + Guild Voice States intents at runtime.
 
-### 4. Start with Docker
+### 4. Start on the Pi
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 ```
 
 Watch logs:
@@ -85,6 +126,13 @@ Stop:
 
 ```bash
 docker compose down
+```
+
+After code changes:
+
+```bash
+git pull
+docker compose up -d --build
 ```
 
 ### 5. Test
