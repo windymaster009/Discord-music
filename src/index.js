@@ -7,8 +7,8 @@ const {
   MessageFlags,
   SlashCommandBuilder,
 } = require("discord.js");
-const { Rainlink, Library } = require("rainlink");
-const { VoicePlugin } = require("rainlink-voice");
+const { Connectors } = require("shoukaku");
+const { Kazagumo } = require("kazagumo");
 const config = require("./config");
 const { sendPlayerController, queueText } = require("./ui/playerController");
 
@@ -27,12 +27,23 @@ const client = new Client({
 });
 
 client.config = config;
-client.rainlink = new Rainlink({
-  nodes: config.rainlinkNodes,
-  library: new Library.DiscordJS(client),
-  plugins: [new VoicePlugin()],
-  options: config.rainlinkOptions,
-});
+client.kazagumo = new Kazagumo(
+  {
+    defaultSearchEngine: config.defaultSearchEngine,
+    send: (guildId, payload) => {
+      const guild = client.guilds.cache.get(guildId);
+      if (guild) guild.shard.send(payload);
+    },
+  },
+  new Connectors.DiscordJS(client),
+  config.lavalinkNodes,
+  {
+    resume: true,
+    resumeTimeout: 30,
+    reconnectTries: 5,
+    reconnectInterval: 5,
+  },
+);
 
 const commands = [
   new SlashCommandBuilder()
@@ -56,7 +67,7 @@ const commands = [
 ].map((command) => command.toJSON());
 
 function getPlayerByGuildId(guildId) {
-  return client.rainlink.players.get(guildId);
+  return client.kazagumo.players.get(guildId);
 }
 
 function getVoiceChannel(member) {
@@ -69,12 +80,10 @@ async function requireSameVoiceInteraction(interaction, player) {
     await interaction.reply({ content: "Join a voice channel first 🎧", flags: MessageFlags.Ephemeral });
     return null;
   }
-
   if (player && player.voiceId !== voice.id) {
     await interaction.reply({ content: "Join the same voice channel as the bot first.", flags: MessageFlags.Ephemeral });
     return null;
   }
-
   return voice;
 }
 
@@ -84,21 +93,18 @@ async function requireSameVoiceMessage(message, player) {
     await message.reply("Join a voice channel first 🎧");
     return null;
   }
-
   if (player && player.voiceId !== voice.id) {
     await message.reply("Join the same voice channel as the bot first.");
     return null;
   }
-
   return voice;
 }
 
 async function createPlayer(guild, channelId, voice) {
-  return client.rainlink.create({
+  return client.kazagumo.createPlayer({
     guildId: guild.id,
     textId: channelId,
     voiceId: voice.id,
-    shardId: guild.shardId,
     volume: config.defaultVolume,
     deaf: true,
   });
@@ -106,23 +112,24 @@ async function createPlayer(guild, channelId, voice) {
 
 function addSearchResult(player, result) {
   if (result.type === "PLAYLIST") {
-    for (const track of result.tracks) player.queue.add(track);
+    player.queue.add(result.tracks);
     return `Added **${result.playlistName || "playlist"}** — ${result.tracks.length} songs 🎶`;
   }
 
   const track = result.tracks[0];
   player.queue.add(track);
-  return `Added **${track.title}** — ${track.author} 🎵`;
+  return `Added **${track.title}** — ${track.author || "Unknown"} 🎵`;
 }
 
 async function searchMusic(query, requester) {
-  return client.rainlink.search(query, {
-    requester,
-    sourceID: config.lavalinkSource,
-  });
+  return client.kazagumo.search(query, { requester });
 }
 
-async function play(interaction) {
+async function startPlayback(player) {
+  if (!player.playing && !player.paused) await player.play();
+}
+
+async function playInteraction(interaction) {
   let player = getPlayerByGuildId(interaction.guildId);
   const voice = await requireSameVoiceInteraction(interaction, player);
   if (!voice) return;
@@ -131,17 +138,12 @@ async function play(interaction) {
   await interaction.deferReply();
 
   const result = await searchMusic(query, interaction.member);
-
-  if (!result?.tracks?.length || result.type === "EMPTY" || result.type === "ERROR") {
-    return interaction.editReply("I couldn't find anything for that query.");
-  }
+  if (!result?.tracks?.length) return interaction.editReply("I couldn't find anything for that query.");
 
   if (!player) player = await createPlayer(interaction.guild, interaction.channelId, voice);
-
   const response = addSearchResult(player, result);
   await interaction.editReply(response);
-
-  if (!player.playing) await player.play();
+  await startPlayback(player);
 }
 
 async function playMessage(message, query) {
@@ -149,25 +151,17 @@ async function playMessage(message, query) {
   const voice = await requireSameVoiceMessage(message, player);
   if (!voice) return;
 
-  if (!query) {
-    return message.reply(`Usage: \`${config.prefix}p <song or URL>\` or \`${config.prefix}play <song or URL>\``);
-  }
+  if (!query) return message.reply(`Usage: \`${config.prefix}p <song or URL>\` or \`${config.prefix}play <song or URL>\``);
 
   const status = await message.reply(`Searching for **${query}** 🔎`);
-
   try {
     const result = await searchMusic(query, message.member);
-
-    if (!result?.tracks?.length || result.type === "EMPTY" || result.type === "ERROR") {
-      return status.edit("I couldn't find anything for that query.");
-    }
+    if (!result?.tracks?.length) return status.edit("I couldn't find anything for that query.");
 
     if (!player) player = await createPlayer(message.guild, message.channelId, voice);
-
     const response = addSearchResult(player, result);
     await status.edit(response);
-
-    if (!player.playing) await player.play();
+    await startPlayback(player);
   } catch (error) {
     console.error(`[Prefix ${config.prefix}play] failed:`, error);
     await status.edit("Something went wrong while trying to play that song.").catch(() => null);
@@ -179,23 +173,20 @@ async function simplePlayerAction(interaction, action) {
   if (!player?.queue?.current) {
     return interaction.reply({ content: "Nothing is playing right now.", flags: MessageFlags.Ephemeral });
   }
-
   const voice = await requireSameVoiceInteraction(interaction, player);
   if (!voice) return;
 
   if (action === "pause") {
-    await player.pause();
+    player.pause(true);
     return interaction.reply({ content: "Paused ⏸️", flags: MessageFlags.Ephemeral });
   }
   if (action === "resume") {
-    await player.resume();
+    player.pause(false);
     return interaction.reply({ content: "Resumed ▶️", flags: MessageFlags.Ephemeral });
   }
   if (action === "skip") {
-    if (player.queue.isEmpty) {
-      return interaction.reply({ content: "There isn't another song in the queue.", flags: MessageFlags.Ephemeral });
-    }
-    await player.skip();
+    if (player.queue.isEmpty) return interaction.reply({ content: "There isn't another song in the queue.", flags: MessageFlags.Ephemeral });
+    player.skip();
     return interaction.reply({ content: "Skipped ⏭️", flags: MessageFlags.Ephemeral });
   }
 }
@@ -208,38 +199,32 @@ async function prefixPlayerAction(message, command, args) {
     if (["queue", "q"].includes(command)) {
       return message.reply(`**Now:** ${player.queue.current.title}\n\n**Up next**\n${queueText(player)}`);
     }
-    return message.reply(`🎵 **${player.queue.current.title}** — ${player.queue.current.author}`);
+    return message.reply(`🎵 **${player.queue.current.title}** — ${player.queue.current.author || "Unknown"}`);
   }
 
-  if (!player?.queue?.current && !["stop", "leave"].includes(command)) {
-    return message.reply("Nothing is playing right now.");
-  }
+  if (!player && ["stop", "leave"].includes(command)) return message.reply("I'm not connected right now.");
+  if (!player?.queue?.current) return message.reply("Nothing is playing right now.");
 
   const voice = await requireSameVoiceMessage(message, player);
   if (!voice) return;
 
   if (command === "pause") {
-    await player.pause();
+    player.pause(true);
     return message.reply("Paused ⏸️");
   }
-
   if (command === "resume") {
-    await player.resume();
+    player.pause(false);
     return message.reply("Resumed ▶️");
   }
-
   if (["skip", "s"].includes(command)) {
     if (player.queue.isEmpty) return message.reply("There isn't another song in the queue.");
-    await player.skip();
+    player.skip();
     return message.reply("Skipped ⏭️");
   }
-
   if (["stop", "leave"].includes(command)) {
-    if (!player) return message.reply("I'm not connected right now.");
     await player.destroy();
     return message.reply("Stopped and disconnected 👋");
   }
-
   if (["volume", "vol"].includes(command)) {
     const requested = Number(args[0]);
     if (!Number.isFinite(requested)) return message.reply(`Usage: \`${config.prefix}volume 10-100\``);
@@ -267,37 +252,34 @@ client.once(Events.ClientReady, async (readyClient) => {
   console.log(`${readyClient.user.tag} is ready | Prefix: ${config.prefix}`);
 });
 
-client.rainlink.on("nodeConnect", (node) => console.log(`Lavalink ${node.options.name}: connected`));
-client.rainlink.on("nodeError", (node, error) => console.error(`Lavalink ${node.options.name}:`, error));
-client.rainlink.on("nodeDisconnect", (node, code, reason) =>
-  console.warn(`Lavalink ${node.options.name}: disconnected (${code}) ${reason || ""}`),
-);
-client.rainlink.on("trackStart", (player, track) => sendPlayerController(client, player, track));
+client.kazagumo.shoukaku.on("ready", (name) => console.log(`Lavalink ${name}: ready (Shoukaku/DAVE)`));
+client.kazagumo.shoukaku.on("error", (name, error) => console.error(`Lavalink ${name}:`, error));
+client.kazagumo.shoukaku.on("close", (name, code, reason) => console.warn(`Lavalink ${name}: closed (${code}) ${reason || ""}`));
+client.kazagumo.shoukaku.on("disconnect", (name, count) => console.warn(`Lavalink ${name}: disconnected; ${count} player(s) affected`));
 
-// Rainlink can emit queueEmpty as part of a failed-track transition. Only announce it
-// when there is truly no current track and nothing left to play.
-client.rainlink.on("queueEmpty", (player) => {
-  if (player.queue?.current || !player.queue?.isEmpty) {
-    console.warn(`[Queue:${player.guildId}] transient queueEmpty ignored; another track is still available.`);
-    return;
-  }
-
-  const channel = client.channels.cache.get(player.textId);
-  if (channel) channel.send(`Queue finished. Add another song with \`${config.prefix}p\` or \`/play\` 🎶`).catch(() => null);
+client.kazagumo.on("playerStart", (player, track) => {
+  console.log(`[PlayerStart:${player.guildId}] ${track.title}`);
+  sendPlayerController(client, player, track).catch((error) => console.error("Controller error:", error));
 });
-
-// Playback diagnostics: these are intentionally noisy while we debug the rapid-skip issue.
-client.rainlink.on("playerException", (player, data) => {
+client.kazagumo.on("playerEnd", (player, track) => {
+  console.log(`[PlayerEnd:${player.guildId}] ${track?.title || "unknown"}`);
+});
+client.kazagumo.on("playerEmpty", async (player) => {
+  const channel = client.channels.cache.get(player.textId);
+  if (channel) await channel.send(`Queue finished. Add another song with \`${config.prefix}p\` or \`/play\` 🎶`).catch(() => null);
+  await player.destroy().catch(() => null);
+});
+client.kazagumo.on("playerException", (player, data) => {
   console.error(`[PlaybackException:${player.guildId}]`, JSON.stringify(data, null, 2));
 });
-client.rainlink.on("trackStuck", (player, data) => {
+client.kazagumo.on("playerStuck", (player, data) => {
   console.error(`[TrackStuck:${player.guildId}]`, JSON.stringify(data, null, 2));
 });
-client.rainlink.on("trackResolveError", (player, track, error) => {
-  console.error(`[TrackResolveError:${player.guildId}] ${track?.title || "Unknown track"}:`, error);
+client.kazagumo.on("playerResolveError", (player, track, error) => {
+  console.error(`[TrackResolveError:${player.guildId}] ${track?.title || "Unknown"}:`, error);
 });
-client.rainlink.on("playerWebsocketClosed", (player, data) => {
-  console.error(`[VoiceWebsocketClosed:${player.guildId}]`, JSON.stringify(data, null, 2));
+client.kazagumo.on("playerClosed", (player, data) => {
+  console.error(`[VoiceClosed:${player.guildId}]`, JSON.stringify(data, null, 2));
 });
 
 client.on(Events.MessageCreate, async (message) => {
@@ -305,7 +287,6 @@ client.on(Events.MessageCreate, async (message) => {
 
   const body = message.content.slice(config.prefix.length).trim();
   if (!body) return;
-
   const [rawCommand, ...args] = body.split(/\s+/);
   const command = rawCommand.toLowerCase();
 
@@ -324,8 +305,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isChatInputCommand() || !interaction.guild) return;
 
   try {
-    if (interaction.commandName === "play") return play(interaction);
-
+    if (interaction.commandName === "play") return playInteraction(interaction);
     const player = getPlayerByGuildId(interaction.guildId);
 
     if (interaction.commandName === "pause") return simplePlayerAction(interaction, "pause");
@@ -333,29 +313,17 @@ client.on(Events.InteractionCreate, async (interaction) => {
     if (interaction.commandName === "skip") return simplePlayerAction(interaction, "skip");
 
     if (interaction.commandName === "queue") {
-      if (!player?.queue?.current) {
-        return interaction.reply({ content: "Nothing is playing right now.", flags: MessageFlags.Ephemeral });
-      }
-      return interaction.reply({
-        content: `**Now:** ${player.queue.current.title}\n\n**Up next**\n${queueText(player)}`,
-        flags: MessageFlags.Ephemeral,
-      });
+      if (!player?.queue?.current) return interaction.reply({ content: "Nothing is playing right now.", flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `**Now:** ${player.queue.current.title}\n\n**Up next**\n${queueText(player)}`, flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.commandName === "nowplaying") {
-      if (!player?.queue?.current) {
-        return interaction.reply({ content: "Nothing is playing right now.", flags: MessageFlags.Ephemeral });
-      }
-      return interaction.reply({
-        content: `🎵 **${player.queue.current.title}** — ${player.queue.current.author}`,
-        flags: MessageFlags.Ephemeral,
-      });
+      if (!player?.queue?.current) return interaction.reply({ content: "Nothing is playing right now.", flags: MessageFlags.Ephemeral });
+      return interaction.reply({ content: `🎵 **${player.queue.current.title}** — ${player.queue.current.author || "Unknown"}`, flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.commandName === "volume") {
-      if (!player?.queue?.current) {
-        return interaction.reply({ content: "Nothing is playing right now.", flags: MessageFlags.Ephemeral });
-      }
+      if (!player?.queue?.current) return interaction.reply({ content: "Nothing is playing right now.", flags: MessageFlags.Ephemeral });
       const voice = await requireSameVoiceInteraction(interaction, player);
       if (!voice) return;
       const requested = interaction.options.getInteger("percent", true);
@@ -365,9 +333,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
 
     if (interaction.commandName === "stop") {
-      if (!player) {
-        return interaction.reply({ content: "I'm not connected right now.", flags: MessageFlags.Ephemeral });
-      }
+      if (!player) return interaction.reply({ content: "I'm not connected right now.", flags: MessageFlags.Ephemeral });
       const voice = await requireSameVoiceInteraction(interaction, player);
       if (!voice) return;
       await player.destroy();
